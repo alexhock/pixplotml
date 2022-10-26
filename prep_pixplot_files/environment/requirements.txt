@@ -1,0 +1,8 @@
+pandas
+pytorch-accelerated==0.1.34
+torchvision
+timm==0.6.5
+albumentations==1.2.0
+func_to_script
+glob2==0.7
+ensemble-boxes
