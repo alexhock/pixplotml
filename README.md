@@ -34,8 +34,9 @@ To quickly see Pixplot running on bounding box images extracted from the Coco da
 First, clone the repo and extract the zip file containing coco validation dataset bounding boxes
 
 ```bash
-git clone <pixplot_repo_url>
-unzip pixplot/data/coco_trained.zip ./pixplot/data/
+git clone git clone https://github.com/alexhock/pixplotml.git 
+cd pixplotml
+unzip ./data/coco_trained.zip -d ./data/
 ```
 
 To run pixplot, there are two options: using Python with a new environment, or using Docker where the environment is managed for you.
@@ -55,7 +56,7 @@ To run pixplot, there are two options: using Python with a new environment, or u
 
     ```bash
     cd ../pixplot_server
-    python pixplot/pixplot.py --images "path/to/images/*.jpg" --metadata "path/to/metadata.csv" --image_vectors "path/to/image_vectors.npy"
+    python pixplot.py --images "./data/outputs/images/*.jpg" --metadata "./data/outputs/metadata.csv" --image_vectors "./data/outputs/image_vectors.npy"
     ```
 
 3. Start a web server by running:
@@ -81,7 +82,7 @@ Instead of manually creating a Python environment and performing the steps in th
 2. Run pixplot
     ```bash
     cd data
-    docker run -v `pwd`/outputs_trained:/data -p 8800:8800 pixplot:1.0 /data 8800 metadata.csv images/*.jpg
+    docker run -v `pwd`/outputs:/data -p 8800:8800 pixplot:1.0 /data 8800 metadata.csv images/*.jpg
     ```
 
     Open a browser to: `http://localhost:8800/output`
