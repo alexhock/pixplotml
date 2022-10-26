@@ -1,6 +1,6 @@
-# PixPlot Visualization for Image-based Machine Learning Projects
+# PixPlot Visualization Tool for Image-based Machine Learning Projects
 
-An interactive and zoomable visualization of your whole dataset. This tool is valuable for object detection and classification projects to perform these tasks:
+An interactive and zoomable visualization of your whole dataset. This web-based tool is valuable for object detection and classification projects to perform these tasks:
 1. Initial investigation and visualization of a labelled (or unlabelled) dataset.
 2. Fixing incorrect classifications and removing invalid or confusing images. (Click on an image and update its label, or flag for removal)
 3. Visualizing false positive bounding boxes to identify why they are occuring.
