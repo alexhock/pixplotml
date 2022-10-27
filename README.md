@@ -52,11 +52,10 @@ To run pixplot, there are two options: using Python with a new environment, or u
     pip install -r requirements.txt
     ```
 
-2. Run the pixplot pre-processing.
+2. Run the pixplot pre-processing. This prepares images and creates the pixplot website in a folder called 'output':
 
     ```bash
-    cd ../pixplot_server
-    python pixplot.py --images "./data/outputs/images/*.jpg" --metadata "./data/outputs/metadata.csv" --image_vectors "./data/outputs/image_vectors.npy"
+    python pixplot/pixplot.py --images "../data/outputs/images/*.jpg" --metadata "../data/outputs/metadata.csv" --image_vectors "../data/outputs/image_vectors.npy"
     ```
 
 3. Start a web server by running:
