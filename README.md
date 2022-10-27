@@ -34,7 +34,7 @@ To quickly see Pixplot running on bounding box images extracted from the Coco da
 First, clone the repo and extract the zip file containing coco validation dataset bounding boxes
 
 ```bash
-git clone git clone https://github.com/alexhock/pixplotml.git 
+git clone https://github.com/alexhock/pixplotml.git 
 cd pixplotml
 unzip ./data/coco_trained.zip -d ./data/
 ```
