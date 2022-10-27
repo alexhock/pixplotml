@@ -1,6 +1,6 @@
 # PixPlot Visualization Tool for Image-based Machine Learning Projects
 
-An interactive and zoomable visualization of your whole dataset. This web-based tool is valuable for object detection and classification projects to perform these tasks:
+An interactive and zoomable visualization of your whole dataset. This web-based tool, a modified version of the original [Pixplot](https://github.com/YaleDHLab/pix-plot), is valuable for object detection and classification projects to perform these tasks:
 1. Initial investigation and visualization of a labelled (or unlabelled) dataset.
 2. Fixing incorrect classifications and removing invalid or confusing images. (Click on an image and update its label, or flag for removal)
 3. Visualizing false positive bounding boxes to identify why they are occuring.
@@ -13,7 +13,7 @@ UMap Visualization            |  Interactive and Zoomable          |   Different
 
 The repo contains:
 
-1. A Pixplot server based on [PixPlot](https://github.com/YaleDHLab/pix-plot). The original PixPlot uses a network trained on ImageNet but we find fine-tuning on your data produces much more accurate visualizations. So we have added:
+1. A Pixplot server based on [PixPlot](https://github.com/YaleDHLab/pix-plot). We have added tools helpful for labelling such as a legend, border colours representing the label, and functionality to update labels or flag images for removal. The original PixPlot uses a classification model trained on ImageNet but we find fine-tuning on your own data produces much more accurate visualizations. So we have added:
 
 2. A preparation step to customise the visualization to your image data. The preparation step uses your images and a metadata.csv file to train a PyTorch classification model and then output an image vectors file for clustering by Pixplot (using UMap). See [Fine-tune Pixplot for your own images](./prep_pixplot_files/README.md) for more details. The code to do this is in the prep_pixplot_files folder.
 (We use [Pytorch-Accelerated](https://github.com/Chris-hughes10/pytorch-accelerated) to easily and simply train a classification model) 
