@@ -613,9 +613,9 @@
                     <% _.forEach(labels, function(key, idx) { %>
                       <label><input type="radio" name="multi-label-option" id="<%- idx %>" value="<%- idx %>" style="margin:5px; height:100%"/><%- key %></label>
                     <% }) %>
-                    <label><input type="radio" name="multi-label-option" id="-1" style="margin:5px; height:100%">Other:<input type='text' id="other-new-label" name="other-new-label" style="margin:10px;font-size:10pt"/></label>
-                    <button id="save-selected-images-label" style="float:right;margin-top:10px">Save</button>
+                    <label><input type="radio" name="multi-label-option" id="-1" value="-1" style="margin:5px; height:100%">Other:<input type='text' id="other-new-label" name="other-new-label" style="margin:10px;font-size:10pt" disabled/></label>
                   <% } %> 
+                  <button id="save-selected-images-label" style="float:right;margin-top:10px" disabled>Save</button>
                 </div>
               </div>
             </div>

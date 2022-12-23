@@ -1840,7 +1840,7 @@ function Lasso() {
     downloadLink: document.querySelector('#download-link'),
     downloadInput: document.querySelector('#download-filename'),
 
-    saveLabelButton: document.querySelector('#save-selected-images-label'),
+    //saveLabelButton: document.querySelector('#save-selected-images-label'),
   }
   this.addMouseEventListeners();
   this.addModalEventListeners();
@@ -1928,6 +1928,16 @@ Lasso.prototype.addModalEventListeners = function() {
     });
     this.elems.modalContainer.style.display = 'block';
     this.displayed = true;
+
+    // add event listeners to the buttons
+    var saveLabelButton = document.querySelector('#save-selected-images-label');
+    saveLabelButton.addEventListener('click', this.handleSaveLabel.bind(this));
+    
+    var radioLabelButtons = document.querySelectorAll('input[name="multi-label-option"]');
+    for (var i=0; i<radioLabelButtons.length; i++) {
+      radioLabelButtons[i].addEventListener('change', this.handleRadioLabel.bind(this));
+    }
+
   }.bind(this))
 
   // toggle the inclusion of a cell in the selection
@@ -1963,9 +1973,6 @@ Lasso.prototype.addModalEventListeners = function() {
   // allow users to clear the selected images
   this.elems.xIcon.addEventListener('click', this.clear.bind(this))
 
-  // add the label save button handler to record the selected label 
-  this.elems.saveLabelButton.addEventListener('click', self.handleSaveLabel.bind(this));
-
 }
 
 Lasso.prototype.closeModal = function() {
@@ -1973,11 +1980,22 @@ Lasso.prototype.closeModal = function() {
   this.displayed = false;
 }
 
+Lasso.prototype.handleRadioLabel = function(e) {
+  // enable the text input if the user selects "other"
+  if (e.target.value == -1) {
+    document.querySelector('#other-new-label').disabled = false;
+  } else {
+    document.querySelector('#other-new-label').disabled = true;
+  }
+  // enable the save button
+  document.querySelector("#save-selected-images-label").disabled = false;
+}
+
 // save the selected label to the selected images
 Lasso.prototype.handleSaveLabel = function(e) {
   // get the selected label
   var labelOptions = document.querySelectorAll('input[name="multi-label-option"]')
-  let selectedId;
+  let selectedId = -100;
   for (let i=0; i<labelOptions.length; i++) {
     radioButton = labelOptions[i];
     if (radioButton.checked) {
@@ -1986,10 +2004,16 @@ Lasso.prototype.handleSaveLabel = function(e) {
     }
   }
 
+  // return if no label was selected
+  if (selectedId ==-100) return;
+
   // check if the user selected the "other" option
   if (selectedId == -1) {
     // get the other text
     newLabelText = document.querySelector('input[name="other-new-label"]').value;
+    // return if the text is empty
+    if (newLabelText == '') return;
+
     // add the label to the label list
     selectedId = imageLabels.addLabel(newLabelText);
   }
@@ -2001,7 +2025,7 @@ Lasso.prototype.handleSaveLabel = function(e) {
   imageLabels.updateFilenamesLabel(selectedFileNames, selectedId);
 
   // close the window after save
-  //this.closeModal();
+  this.closeModal();
 }
 
 Lasso.prototype.update = function() {
@@ -3174,6 +3198,8 @@ Labels.prototype.download = function(filename, text) {
 Labels.prototype.createLegend = function() {
 
   var legendContainer = this.elems['legendContainer'];
+  // remove contents of legend
+  legendContainer.textContent = '';
 
   // loop through labels
   for(var colorId in this.idToLabel) {
@@ -3254,8 +3280,6 @@ Labels.prototype.addLabel = function(label) {
   // update the legend
   this.createLegend();
 
-  // update the colors of image borders
-  //this.redrawBorders();
   return newId;
 }
 
