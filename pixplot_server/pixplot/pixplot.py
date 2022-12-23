@@ -520,7 +520,8 @@ def write_metadata(metadata, **kwargs):
     colors = [c for c in product([0, 128 / 255, 192 / 255, 255 / 255], repeat=3)]
     random.shuffle(colors)  # set seed in commandline args for repeatability
     colors = base_colors + colors
-    id_to_color = {idx: colors[idx] for idx in enumerate(colors)}
+    #id_to_color = {idx: colors[idx] for idx in enumerate(colors)}
+    id_to_color = {idx: c for idx, c in enumerate(colors)}
     # id_to_color = {idx: colors[idx] for idx in id_to_label.keys()}
     out_path = os.path.join(out_dir, "labels", "id_to_color.json")
     write_json(out_path, id_to_color, **kwargs)
