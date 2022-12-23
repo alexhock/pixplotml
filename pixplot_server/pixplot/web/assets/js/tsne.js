@@ -1,4 +1,4 @@
-// version: VERSION_NUMBER
+// version: 1.0.0
 
 /**
 *
@@ -1421,10 +1421,6 @@ World.prototype.getShaderMaterial = function(obj) {
         type: 'vec3',
         value: new Float32Array([255/255, 255/255, 255/255]),
       },
-      /*labelBorderColor: { 
-        type: 'vec3',
-        value: new Float32Array([255/1, 255/255, 255/255]),
-      },*/
       display: {
         type: 'f',
         value: 1.0,
@@ -1499,15 +1495,6 @@ World.prototype.setBorderColorImages = function(indices, colors) {
     attr.needsUpdate = true;
   }
 
-  //this.setBuffer('labelBorderColor', vals);
-  /*
-  for (var i=0; i<data.cells.length; i++) {
-    data.cells[i].tx = pos[i][0];
-    data.cells[i].ty = pos[i][1];
-    data.cells[i].tz = pos[i][2] || data.cells[i].getZ(pos[i][0], pos[i][1]);
-    data.cells[i].setBuffer('targetTranslation');
-  }
-  */  
 }
 
 /**
@@ -1818,8 +1805,6 @@ function Legend() {
 
   //this.addMouseEventListeners();
   //this.addModalEventListeners();
-
-
 }
 
 
@@ -1854,6 +1839,8 @@ function Lasso() {
     filetypeButtons: document.querySelectorAll('.filetype'),
     downloadLink: document.querySelector('#download-link'),
     downloadInput: document.querySelector('#download-filename'),
+
+    saveLabelButton: document.querySelector('#save-selected-images-label'),
   }
   this.addMouseEventListeners();
   this.addModalEventListeners();
@@ -1935,7 +1922,10 @@ Lasso.prototype.addModalEventListeners = function() {
       return this.selected[k];
     }.bind(this))
     var template = _.template(this.elems.modalTemplate.textContent)
-    this.elems.modalTarget.innerHTML = template({ images: images });
+    this.elems.modalTarget.innerHTML = template({ 
+      images: images,
+      labels: imageLabels.idToLabel 
+    });
     this.elems.modalContainer.style.display = 'block';
     this.displayed = true;
   }.bind(this))
@@ -1972,6 +1962,46 @@ Lasso.prototype.addModalEventListeners = function() {
 
   // allow users to clear the selected images
   this.elems.xIcon.addEventListener('click', this.clear.bind(this))
+
+  // add the label save button handler to record the selected label 
+  this.elems.saveLabelButton.addEventListener('click', self.handleSaveLabel.bind(this));
+
+}
+
+Lasso.prototype.closeModal = function() {
+  this.elems.modalContainer.style.display = 'none';
+  this.displayed = false;
+}
+
+// save the selected label to the selected images
+Lasso.prototype.handleSaveLabel = function(e) {
+  // get the selected label
+  var labelOptions = document.querySelectorAll('input[name="multi-label-option"]')
+  let selectedId;
+  for (let i=0; i<labelOptions.length; i++) {
+    radioButton = labelOptions[i];
+    if (radioButton.checked) {
+      selectedId = radioButton.value;
+      break;
+    }
+  }
+
+  // check if the user selected the "other" option
+  if (selectedId == -1) {
+    // get the other text
+    newLabelText = document.querySelector('input[name="other-new-label"]').value;
+    // add the label to the label list
+    selectedId = imageLabels.addLabel(newLabelText);
+  }
+
+  // get the user selected images
+  var selectedFileNames = this.getSelectedFilenames();
+
+  // update the labels for the selected label.
+  imageLabels.updateFilenamesLabel(selectedFileNames, selectedId);
+
+  // close the window after save
+  //this.closeModal();
 }
 
 Lasso.prototype.update = function() {
@@ -3207,9 +3237,34 @@ Labels.prototype.redrawBorders = function() {
 
 }
 
-Labels.prototype.updateFilenameLabel = function(filename, newId) {
+Labels.prototype.addLabel = function(label) {
 
-    newLabel = this.idToLabel[newId];
+  // check if the label already exists
+  if (label in this.labelToId) {
+    return;
+  }
+   
+  // get the next id for the new label 
+  var newId = Object.keys(this.idToLabel).length;
+
+  // add the new label
+  this.idToLabel[newId] = label;
+  this.labelToId[label] = newId;
+
+  // update the legend
+  this.createLegend();
+
+  // update the colors of image borders
+  //this.redrawBorders();
+  return newId;
+}
+
+Labels.prototype.updateFilenamesLabel = function(filenames, updatedId) {
+
+  newLabel = this.idToLabel[updatedId];
+
+  for (var i = 0; i < filenames.length; i++) {
+    filename = filenames[i];
 
     // check if the label has changed, update and redraw if it has.
     if (this.filenameLabel[filename] != newLabel) {
@@ -3217,12 +3272,18 @@ Labels.prototype.updateFilenameLabel = function(filename, newId) {
       this.filenameLabel[filename] = newLabel;
       // track the update for the download label updates icon
       this.userLabelUpdates[filename] = newLabel;
-
-      // store the changes so can be recovered after page refresh
-      sessionStorage.setItem('labelChanges',  JSON.stringify(this.userLabelUpdates));
-
-      this.redrawBorders();
     }
+  }
+
+  // store the changes so can be recovered after page refresh
+  sessionStorage.setItem('labelChanges',  JSON.stringify(this.userLabelUpdates));
+
+  this.redrawBorders();
+
+}
+
+Labels.prototype.updateFilenameLabel = function(filename, newId) {
+  this.updateFilenamesLabel([filename], newId);  
 }
 
 Labels.prototype.updateLabels = function() {

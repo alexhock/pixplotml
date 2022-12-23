@@ -1,0 +1,32 @@
+import uuid
+
+
+config = {
+    "images": None,
+    "metadata": None,
+    "out_dir": "output",
+    "max_images": None,
+    "use_cache": True,
+    "encoding": "utf8",
+    "min_cluster_size": 20,
+    "max_clusters": 10,
+    "atlas_size": 2048,
+    "cell_size": 32,
+    "lod_cell_height": 128,
+    "n_neighbors": [15],
+    "min_dist": [0.01],
+    "n_components": 2,
+    "metric": "correlation",
+    "pointgrid_fill": 0.05,
+    "gzip": False,
+    "min_size": 100,
+    "min_score": 0.3,
+    "min_vertices": 18,
+    "plot_id": str(uuid.uuid1()),
+    "seed": 24,
+    "n_clusters": 12,
+    "geojson": None,
+    "image_vectors": False,
+    "hdbscan_available": False,
+    "clusters_provided": False,
+}

@@ -606,6 +606,18 @@
                   </div>
                 <% }); %>
               </div>
+              <div >
+                <hr/>
+                <div id='selected-images-label' style='font-size:10pt'>
+                  <% if (labels) { %>
+                    <% _.forEach(labels, function(key, idx) { %>
+                      <label><input type="radio" name="multi-label-option" id="<%- idx %>" value="<%- idx %>" style="margin:5px; height:100%"/><%- key %></label>
+                    <% }) %>
+                    <label><input type="radio" name="multi-label-option" id="-1" style="margin:5px; height:100%">Other:<input type='text' id="other-new-label" name="other-new-label" style="margin:10px;font-size:10pt"/></label>
+                    <button id="save-selected-images-label" style="float:right;margin-top:10px">Save</button>
+                  <% } %> 
+                </div>
+              </div>
             </div>
           </script>
           <div id='selected-images-target'></div>

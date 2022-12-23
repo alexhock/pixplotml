@@ -5,13 +5,17 @@ import datetime
 import os
 import sys
 from pathlib import Path
-import uuid
+
 import warnings
 from distutils.dir_util import copy_tree
 from os.path import dirname, exists, join, realpath
 
 import glob2
 from itertools import product
+
+from urllib.request import urlopen
+
+from settings import config
 
 warnings.filterwarnings("ignore")
 
@@ -51,7 +55,6 @@ if "--copy_web_only" not in sys.argv:
     from pointgrid import align_points_to_grid
     from scipy.spatial.distance import cdist
     from scipy.stats import kde
-    from sklearn.decomposition import PCA
     from sklearn.preprocessing import minmax_scale
     from tqdm import tqdm
 
@@ -61,63 +64,30 @@ if "--copy_web_only" not in sys.argv:
     # Optional install imports
     ##
 
-    try:
-        print("Mtnse")
-        from MulticoreTSNE import MulticoreTSNE as TSNE
-    except:
-        from sklearn.manifold import TSNE
+    if config["hdbscan_available"]:
+        try:
+            from hdbscan import HDBSCAN
 
-    try:
-        from hdbscan import HDBSCAN
+            cluster_method = "hdbscan"
+        except:
+            print(timestamp(), "HDBSCAN not available; using sklearn KMeans")
+            from sklearn.cluster import KMeans
 
-        cluster_method = "hdbscan"
-    except:
-        print(timestamp(), "HDBSCAN not available; using sklearn KMeans")
-        from sklearn.cluster import KMeans
+            cluster_method = "kmeans"
 
-        cluster_method = "kmeans"
-
-    try:
-        from cuml.manifold.umap import UMAP
-
-        print(timestamp(), "Using cuml UMAP")
-        cuml_ready = True
-        from umap import AlignedUMAP
-    except:
-        from umap import UMAP, AlignedUMAP
-
-    print(timestamp(), "CUML not available; using umap-learn UMAP")
     cuml_ready = False
+    #try:
+    #    from cuml.manifold.umap import UMAP
+    #    print(timestamp(), "Using cuml UMAP")
+    #    cuml_ready = True
+    #    from umap import AlignedUMAP
+    #except:
+
+    from umap import UMAP, AlignedUMAP
+    #print(timestamp(), "CUML not available; using umap-learn UMAP")
 
     # handle truncated images in PIL (managed by Pillow)
     ImageFile.LOAD_TRUNCATED_IMAGES = True
-
-config = {
-    "images": None,
-    "metadata": None,
-    "out_dir": "output",
-    "max_images": None,
-    "use_cache": True,
-    "encoding": "utf8",
-    "min_cluster_size": 20,
-    "max_clusters": 10,
-    "atlas_size": 2048,
-    "cell_size": 32,
-    "lod_cell_height": 128,
-    "n_neighbors": [15],
-    "min_dist": [0.01],
-    "n_components": 2,
-    "metric": "correlation",
-    "pointgrid_fill": 0.05,
-    "gzip": False,
-    "min_size": 100,
-    "min_score": 0.3,
-    "min_vertices": 18,
-    "plot_id": str(uuid.uuid1()),
-    "seed": 24,
-    "n_clusters": 12,
-    "geojson": None,
-}
 
 
 def array_to_img(x, data_format="channels_last", scale=True, dtype="float32"):
@@ -218,6 +188,7 @@ def process_images(**kwargs):
         kwargs["metadata"],
         kwargs["vecs"],
     ) = load_and_filter_images(**kwargs)
+    kwargs["num_images"] = len(kwargs["image_paths"])
     kwargs["atlas_dir"] = get_atlas_data(**kwargs)
     get_manifest(**kwargs)
     write_images(**kwargs)
@@ -263,7 +234,8 @@ def load_input_files(**kwargs):
     # load the metadata csv file
     all_metadata = get_metadata_list(**kwargs)
 
-    vecs = np.load(kwargs["image_vectors"])
+    if kwargs["image_vectors"]:
+        vecs = np.load(kwargs["image_vectors"])
 
     all_images = []
 
@@ -271,10 +243,25 @@ def load_input_files(**kwargs):
     image_root_path = Path(image_paths).parent
 
     for idx, metadata in enumerate(all_metadata):
-        path = image_root_path / metadata["filename"]
-        vec = vecs[idx, :]
 
-        img = Image(path, **{"metadata": metadata, "vec": vec})
+        if kwargs["image_vectors"]:
+            vec = vecs[idx, :]
+        else:
+            vec = None
+
+        filename = metadata["filename"]
+
+        if "blob_path" in metadata:
+            file_location = metadata["blob_path"]
+        else:
+            file_location = filename
+
+        img = Image(
+            image_root_path, 
+            file_location,
+            filename, 
+            **{"metadata": metadata, "vec": vec}
+        )
         all_images.append(img)
 
     return all_images
@@ -533,7 +520,8 @@ def write_metadata(metadata, **kwargs):
     colors = [c for c in product([0, 128 / 255, 192 / 255, 255 / 255], repeat=3)]
     random.shuffle(colors)  # set seed in commandline args for repeatability
     colors = base_colors + colors
-    id_to_color = {idx: colors[idx] for idx in id_to_label.keys()}
+    id_to_color = {idx: colors[idx] for idx in enumerate(colors)}
+    # id_to_color = {idx: colors[idx] for idx in id_to_label.keys()}
     out_path = os.path.join(out_dir, "labels", "id_to_color.json")
     write_json(out_path, id_to_color, **kwargs)
 
@@ -696,7 +684,12 @@ def save_atlas(atlas, out_dir, n):
 
 def get_layouts(**kwargs):
     """Get the image positions in each projection"""
-    umap = get_umap_layout(**kwargs)
+
+    if kwargs['clusters_provided']:
+        umap = get_layout_positions(**kwargs)
+    else:
+        umap = get_umap_layout(**kwargs)
+
     layouts = {
         "umap": umap,
         "alphabetic": {
@@ -712,6 +705,26 @@ def get_layouts(**kwargs):
     }
     return layouts
 
+
+def get_layout_positions(**kwargs):
+    """
+    """
+    metadata = kwargs['metadata']
+
+    out_path = get_path("layouts", "umap", **kwargs)
+
+    z = [(m['x'], m['y']) for m in metadata]
+
+    return {
+        "variants": [
+            {
+                "n_neighbors": kwargs["n_neighbors"][0],
+                "min_dist": kwargs["min_dist"][0],
+                "layout": write_layout(out_path, z, **kwargs),
+                "jittered": get_pointgrid_layout(out_path, "umap", **kwargs),
+            }
+        ]
+    }
 
 def get_umap_layout(**kwargs):
     """Get the x,y positions of images passed through a umap projection"""
@@ -866,43 +879,6 @@ def get_umap_model(**kwargs):
             random_state=kwargs["seed"],
             transform_seed=kwargs["seed"],
         )
-
-
-def get_tsne_layout(**kwargs):
-    """Get the x,y positions of images passed through a TSNE projection"""
-    print(
-        timestamp(), "Creating TSNE layout with " + str(multiprocessing.cpu_count()) + " cores..."
-    )
-    out_path = get_path("layouts", "tsne", **kwargs)
-    if os.path.exists(out_path) and kwargs["use_cache"]:
-        return out_path
-    model = TSNE(perplexity=kwargs.get("perplexity", 2), n_jobs=multiprocessing.cpu_count())
-    z = model.fit_transform(kwargs["vecs"])
-    return write_layout(out_path, z, **kwargs)
-
-
-def get_rasterfairy_layout(**kwargs):
-    """Get the x, y position of images passed through a rasterfairy projection"""
-    print(timestamp(), "Creating rasterfairy layout")
-    out_path = get_path("layouts", "rasterfairy", **kwargs)
-    if os.path.exists(out_path) and kwargs["use_cache"]:
-        return out_path
-    umap = np.array(read_json(kwargs["umap"]["variants"][0]["layout"], **kwargs))
-    if umap.shape[-1] != 2:
-        print(timestamp(), "Could not create rasterfairy layout because data is not 2D")
-        return None
-    umap = (umap + 1) / 2  # scale 0:1
-    try:
-        umap = coonswarp.rectifyCloud(
-            umap,  # stretch the distribution
-            perimeterSubdivisionSteps=4,
-            autoPerimeterOffset=False,
-            paddingScale=1.05,
-        )
-    except Exception as exc:
-        print(timestamp(), "Coonswarp rectification could not be performed", exc)
-    pos = rasterfairy.transformPointCloud2D(umap)[0]
-    return write_layout(out_path, pos, **kwargs)
 
 
 def get_lap_layout(**kwargs):
@@ -1363,8 +1339,22 @@ def read_json(path, **kwargs):
         return json.load(f)
 
 
-def get_hotspots(layouts={}, use_high_dimensional_vectors=True, **kwargs):
-    """Return the stable clusters from the condensed tree of connected components from the density graph"""
+def get_provided_hotspots(**kwargs):
+    
+    metadata = kwargs["metadata"]
+
+    d = defaultdict(lambda: defaultdict(list))
+    for idx, m in enumerate(metadata):
+        cluster_id = m['cluster']
+        if cluster_id != -1:
+            d[cluster_id]["images"].append(idx)
+            d[cluster_id]["img"] = clean_filename(kwargs["image_paths"][idx])
+            d[cluster_id]["layout"] = "inception_vectors"
+
+    return d
+
+
+def run_clustering(layouts={}, use_high_dimensional_vectors=True, **kwargs):
     print(timestamp(), "Clustering data with {}".format(cluster_method))
     if use_high_dimensional_vectors:
         vecs = kwargs["vecs"]
@@ -1372,6 +1362,7 @@ def get_hotspots(layouts={}, use_high_dimensional_vectors=True, **kwargs):
         vecs = read_json(layouts["umap"]["variants"][0]["layout"], **kwargs)
     model = get_cluster_model(**kwargs)
     z = model.fit(vecs)
+    
     # create a map from cluster label to image indices in cluster
     d = defaultdict(lambda: defaultdict(list))
     for idx, i in enumerate(z.labels_):
@@ -1379,25 +1370,41 @@ def get_hotspots(layouts={}, use_high_dimensional_vectors=True, **kwargs):
             d[i]["images"].append(idx)
             d[i]["img"] = clean_filename(kwargs["image_paths"][idx])
             d[i]["layout"] = "inception_vectors"
+    return d
+
+
+def get_hotspots(layouts={}, use_high_dimensional_vectors=True, **kwargs):
+    """Return the stable clusters from the condensed tree of connected components from the density graph"""
+
+    if kwargs["clusters_provided"]:
+        d = get_provided_hotspots(**kwargs)
+    else:
+        d = run_clustering(layouts, use_high_dimensional_vectors, **kwargs)
+    
     # remove massive clusters
     deletable = []
     for i in d:
         # find percent of images in cluster
-        image_percent = len(d[i]["images"]) / len(vecs)
+        image_percent = len(d[i]["images"]) / kwargs["num_images"] 
         # determine if image or area percent is too large
         if image_percent > 0.5:
             deletable.append(i)
+
     for i in deletable:
         del d[i]
     # sort the clusers by size and then label the clusters
     clusters = d.values()
     clusters = sorted(clusters, key=lambda i: len(i["images"]), reverse=True)
+
     for idx, i in enumerate(clusters):
         i["label"] = "Cluster {}".format(idx + 1)
+    
     # slice off the first `max_clusters`
     clusters = clusters[: kwargs["max_clusters"]]
+
     # save the hotspots to disk and return the path to the saved json
     print(timestamp(), "Found", len(clusters), "hotspots")
+
     return write_json(get_path("hotspots", "hotspot", **kwargs), clusters, **kwargs)
 
 
@@ -1448,7 +1455,7 @@ def get_heightmap(path, label, **kwargs):
 def write_images(**kwargs):
     """Write all originals and thumbs to the output dir"""
     for i in stream_images(**kwargs):
-        filename = clean_filename(i.path)
+        filename = clean_filename(i.filename)
         # copy original for lightbox
         out_dir = join(kwargs["out_dir"], "originals")
         if not exists(out_dir):
@@ -1472,16 +1479,30 @@ def get_version():
     return "1.0.0"  # pkg_resources.get_distribution("pixplot").version
 
 
-def load_image(image_path):
+def load_image(root_path, filename):
     """Load image located in the full `image_path`"""
-    return pil_image.open(image_path).convert("RGB")
+
+    try:
+        if filename.startswith("http"):
+            img =  pil_image.open(urlopen(filename)).convert("RGB")
+        else:
+            image_path = os.path.join(root_path, filename)
+            img = pil_image.open(image_path).convert("RGB")
+    except Exception as e:
+        print(timestamp(), "Could not load image from path:", image_path)
+        print(e)
+        return None
+
+    return img
 
 
 class Image:
     def __init__(self, *args, **kwargs):
-        self.path = args[0]
-        self.original = load_image(self.path)
-        self.metadata = kwargs["metadata"]  # ["metadata"] if kwargs["metadata"] else {}
+        self.root_path = args[0]
+        self.file_location = args[1]
+        self.filename = args[2]
+        self.original = load_image(self.root_path, self.file_location)
+        self.metadata = kwargs["metadata"]
         self.vec = kwargs["vec"]
         self.valid = False
 
@@ -1545,8 +1566,8 @@ def parse():
         "--image_vectors",
         type=str,
         default=None,
-        help="Path to a  numpy array file of feature vectors of the images in metadata.csv. Numpy shape is: [[num_images, size_of_embedding]]. File must be created using np.save",
-        required=True,
+        help="Path to a numpy array file of feature vectors of the images in metadata.csv. Numpy shape is: [[num_images, size_of_embedding]]. File must be created using np.save",
+        required=False,
     )
     parser.add_argument(
         "--metadata",
@@ -1555,6 +1576,12 @@ def parse():
         default=config["metadata"],
         help="path to a csv or glob of JSON files with image metadata (see readme for format)",
         required=False,
+    )
+    parser.add_argument(
+        "--clusters_provided",
+        type=bool,
+        default=config["clusters_provided"],
+        help="whether the metadata file contains cluster labels in the x and y columns.",
     )
     parser.add_argument(
         "--max_images",
