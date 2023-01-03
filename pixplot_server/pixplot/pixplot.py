@@ -14,6 +14,7 @@ import glob2
 from itertools import product
 
 from urllib.request import urlopen
+from joblib import parallel, delayed
 
 from settings import config
 
@@ -47,6 +48,7 @@ if "--copy_web_only" not in sys.argv:
     from collections import defaultdict
 
     import numpy as np
+
     np.random.seed(42)
     from dateutil.parser import parse as parse_date
     from iiif_downloader import Manifest
@@ -56,9 +58,12 @@ if "--copy_web_only" not in sys.argv:
     from scipy.spatial.distance import cdist
     from scipy.stats import kde
     from sklearn.preprocessing import minmax_scale
+    from sklearn.cluster import KMeans
     from tqdm import tqdm
 
     from urllib.parse import unquote
+
+    cluster_method = "kmeans"
 
     ##
     # Optional install imports
@@ -71,20 +76,9 @@ if "--copy_web_only" not in sys.argv:
             cluster_method = "hdbscan"
         except:
             print(timestamp(), "HDBSCAN not available; using sklearn KMeans")
-            from sklearn.cluster import KMeans
-
-            cluster_method = "kmeans"
 
     cuml_ready = False
-    #try:
-    #    from cuml.manifold.umap import UMAP
-    #    print(timestamp(), "Using cuml UMAP")
-    #    cuml_ready = True
-    #    from umap import AlignedUMAP
-    #except:
-
     from umap import UMAP, AlignedUMAP
-    #print(timestamp(), "CUML not available; using umap-learn UMAP")
 
     # handle truncated images in PIL (managed by Pillow)
     ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -111,7 +105,9 @@ def array_to_img(x, data_format="channels_last", scale=True, dtype="float32"):
         ValueError: if invalid `x` or `data_format` is passed.
     """
     if pil_image is None:
-        raise ImportError("Could not import PIL.Image. " "The use of `array_to_img` requires PIL.")
+        raise ImportError(
+            "Could not import PIL.Image. " "The use of `array_to_img` requires PIL."
+        )
     x = np.asarray(x, dtype=dtype)
     if x.ndim != 3:
         raise ValueError(
@@ -149,7 +145,9 @@ def array_to_img(x, data_format="channels_last", scale=True, dtype="float32"):
         raise ValueError("Unsupported channel number: %s" % (x.shape[2],))
 
 
-def save_img(path, x, data_format="channels_last", file_format=None, scale=True, **kwargs):
+def save_img(
+    path, x, data_format="channels_last", file_format=None, scale=True, **kwargs
+):
     """Saves an image stored as a Numpy array to a path or file object.
 
     # Arguments
@@ -166,7 +164,9 @@ def save_img(path, x, data_format="channels_last", file_format=None, scale=True,
     """
     img = array_to_img(x, data_format=data_format, scale=scale)
     if img.mode == "RGBA" and (file_format == "jpg" or file_format == "jpeg"):
-        warnings.warn("The JPG format does not support " "RGBA images, converting to RGB.")
+        warnings.warn(
+            "The JPG format does not support " "RGBA images, converting to RGB."
+        )
         img = img.convert("RGB")
     img.save(path, format=file_format, **kwargs)
 
@@ -181,16 +181,26 @@ def process_images(**kwargs):
     kwargs = preprocess_kwargs(**kwargs)
     copy_web_assets(**kwargs)
     np.random.seed(kwargs["seed"])
+
     kwargs["out_dir"] = join(kwargs["out_dir"], "data")
+
     (
         kwargs["image_paths"],
         kwargs["loaded_images"],
         kwargs["metadata"],
         kwargs["vecs"],
     ) = load_and_filter_images(**kwargs)
+
+    # write filtered metadata to files - one json for each image
+    write_metadata(**kwargs)
+
+    # create atlas image file
     kwargs["num_images"] = len(kwargs["image_paths"])
     kwargs["atlas_dir"] = get_atlas_data(**kwargs)
+
     get_manifest(**kwargs)
+
+    # write the resized images and their thumbnail to disk
     write_images(**kwargs)
     print(timestamp(), "Done!")
 
@@ -226,6 +236,27 @@ def copy_web_assets(**kwargs):
 ##
 
 
+def load_image_file(metadata, image_root_path):
+
+    image_vector = metadata["image_vector"]
+
+    filename = metadata["filename"]
+
+    if "blob_path" in metadata:
+        file_location = metadata["blob_path"]
+    else:
+        file_location = filename
+
+    img = Image(
+        image_root_path,
+        file_location,
+        filename,
+        **{"metadata": metadata, "vec": image_vector}
+    )
+
+    return img
+
+
 def load_input_files(**kwargs):
     """
     Load the metadata csv, image vectors and images - order in the metadata and the vectors must be the same
@@ -242,6 +273,7 @@ def load_input_files(**kwargs):
     image_paths = kwargs["images"]
     image_root_path = Path(image_paths).parent
 
+    # add image vectors to metadata
     for idx, metadata in enumerate(all_metadata):
 
         if kwargs["image_vectors"]:
@@ -249,26 +281,21 @@ def load_input_files(**kwargs):
         else:
             vec = None
 
-        filename = metadata["filename"]
+        metadata["idx"] = idx
+        metadata["image_vector"] = vec
 
-        if "blob_path" in metadata:
-            file_location = metadata["blob_path"]
-        else:
-            file_location = filename
-
-        img = Image(
-            image_root_path, 
-            file_location,
-            filename, 
-            **{"metadata": metadata, "vec": vec}
-        )
-        all_images.append(img)
+    # load images in parallel using metadata
+    all_images = parallel.Parallel(n_jobs=3)(
+        delayed(load_image_file)(metadata, image_root_path) for metadata in all_metadata
+    )
 
     return all_images
 
 
 def load_and_filter_images(**kwargs):
     """Main method for filtering images given user metadata (if provided)"""
+
+    print(timestamp(), "Loading images and filtering...")
 
     all_loaded_images = load_input_files(**kwargs)
 
@@ -279,7 +306,10 @@ def load_and_filter_images(**kwargs):
         w, h = i.original.size
         # remove images with 0 height or width when resized to lod height
         if (h == 0) or (w == 0):
-            print(timestamp(), "Skipping {} because it contains 0 height or width".format(i.path))
+            print(
+                timestamp(),
+                "Skipping {} because it contains 0 height or width".format(i.path),
+            )
             continue
 
         # remove images that have 0 height or width when resized
@@ -289,15 +319,23 @@ def load_and_filter_images(**kwargs):
         except ValueError:
             print(
                 timestamp(),
-                "Skipping {} because it contains 0 height or width when resized".format(i.path),
+                "Skipping {} because it contains 0 height or width when resized".format(
+                    i.path
+                ),
             )
             continue
         except OSError:
-            print(timestamp(), "Skipping {} because it could not be resized".format(i.path))
+            print(
+                timestamp(),
+                "Skipping {} because it could not be resized".format(i.path),
+            )
             continue
         # remove images that are too wide for the atlas
         if (w / h) > (kwargs["atlas_size"] / kwargs["cell_size"]):
-            print(timestamp(), "Skipping {} because its dimensions are oblong".format(i.path))
+            print(
+                timestamp(),
+                "Skipping {} because its dimensions are oblong".format(i.path),
+            )
             continue
 
         i.metadata["valid"] = True
@@ -326,7 +364,7 @@ def load_and_filter_images(**kwargs):
 
     # save the metadata
     kwargs["metadata"] = filtered_metadata
-    write_metadata(**kwargs)
+    # write_metadata(**kwargs)
 
     return [image_names, filtered_images, filtered_metadata, filtered_vecs]
 
@@ -358,7 +396,9 @@ def get_image_paths(**kwargs):
                         Manifest(url=i).save_images(limit=1)
                     except:
                         print(timestamp(), "Could not download url " + i)
-            image_paths = sorted(glob2.glob(os.path.join("iiif-downloads", "images", "*")))
+            image_paths = sorted(
+                glob2.glob(os.path.join("iiif-downloads", "images", "*"))
+            )
     # handle case where images flag points to a glob of images
     if not image_paths:
         image_paths = sorted(glob2.glob(kwargs["images"]))
@@ -398,7 +438,10 @@ def get_metadata_list(**kwargs):
             headers = [i.lower() for i in next(reader)]
             for i in reader:
                 l.append(
-                    {headers[j]: i[j] if len(i) > j and i[j] else "" for j, _ in enumerate(headers)}
+                    {
+                        headers[j]: i[j] if len(i) > j and i[j] else ""
+                        for j, _ in enumerate(headers)
+                    }
                 )
     # handle json metadata
     else:
@@ -416,6 +459,9 @@ def write_metadata(metadata, **kwargs):
     """Write list `metadata` of objects to disk"""
     if not metadata:
         return
+
+    print(timestamp(), "Writing metadata...")
+
     # create the metadata folders
     out_dir = join(kwargs["out_dir"], "metadata")
     for i in ["filters", "options", "file", "labels"]:
@@ -428,9 +474,12 @@ def write_metadata(metadata, **kwargs):
     for i in metadata:
         filename = clean_filename(i["filename"])
         i["tags"] = [j.strip() for j in i.get("tags", "").split("|")]
+        i["image_vector"] = None
         for j in i["tags"]:
             d["__".join(j.split())].append(filename)
         write_json(os.path.join(out_dir, "file", filename + ".json"), i, **kwargs)
+
+    # create the filters.json file
     write_json(
         os.path.join(out_dir, "filters", "filters.json"),
         [
@@ -441,6 +490,7 @@ def write_metadata(metadata, **kwargs):
         ],
         **kwargs
     )
+
     # create the options for the category dropdown
     for i in d:
         write_json(os.path.join(out_dir, "options", i + ".json"), d[i], **kwargs)
@@ -520,7 +570,6 @@ def write_metadata(metadata, **kwargs):
     colors = [c for c in product([0, 128 / 255, 192 / 255, 255 / 255], repeat=3)]
     random.shuffle(colors)  # set seed in commandline args for repeatability
     colors = base_colors + colors
-    #id_to_color = {idx: colors[idx] for idx in enumerate(colors)}
     id_to_color = {idx: c for idx, c in enumerate(colors)}
     # id_to_color = {idx: colors[idx] for idx in id_to_label.keys()}
     out_path = os.path.join(out_dir, "labels", "id_to_color.json")
@@ -569,7 +618,9 @@ def get_manifest(**kwargs):
     # fetch the date distribution data for point sizing
     if "date" in layouts and layouts["date"]:
         date_layout = read_json(layouts["date"]["labels"], **kwargs)
-        point_sizes["date"] = 1 / ((date_layout["cols"] + 1) * len(date_layout["labels"]))
+        point_sizes["date"] = 1 / (
+            (date_layout["cols"] + 1) * len(date_layout["labels"])
+        )
     # create manifest json
     manifest = {
         "version": get_version(),
@@ -582,7 +633,9 @@ def get_manifest(**kwargs):
         "atlas_dir": kwargs["atlas_dir"],
         "metadata": True if kwargs["metadata"] else False,
         "default_hotspots": get_hotspots(layouts=layouts, **kwargs),
-        "custom_hotspots": get_path("hotspots", "user_hotspots", add_hash=False, **kwargs),
+        "custom_hotspots": get_path(
+            "hotspots", "user_hotspots", add_hash=False, **kwargs
+        ),
         "gzipped": kwargs["gzip"],
         "config": {
             "sizes": {
@@ -594,7 +647,11 @@ def get_manifest(**kwargs):
         "creation_date": datetime.datetime.today().strftime("%d-%B-%Y-%H:%M:%S"),
     }
     # write the manifest without gzipping
-    no_gzip_kwargs = {"out_dir": kwargs["out_dir"], "gzip": False, "plot_id": kwargs["plot_id"]}
+    no_gzip_kwargs = {
+        "out_dir": kwargs["out_dir"],
+        "gzip": False,
+        "plot_id": kwargs["plot_id"],
+    }
     path = get_path("manifests", "manifest", **no_gzip_kwargs)
     write_json(path, manifest, **no_gzip_kwargs)
     path = get_path(None, "manifest", add_hash=False, **no_gzip_kwargs)
@@ -623,7 +680,11 @@ def get_atlas_data(**kwargs):
     """
     # if the atlas files already exist, load from cache
     out_dir = os.path.join(kwargs["out_dir"], "atlases", kwargs["plot_id"])
-    if os.path.exists(out_dir) and kwargs["use_cache"] and not kwargs.get("shuffle", False):
+    if (
+        os.path.exists(out_dir)
+        and kwargs["use_cache"]
+        and not kwargs.get("shuffle", False)
+    ):
         print(timestamp(), "Loading saved atlas data")
         return out_dir
     if not os.path.exists(out_dir):
@@ -686,7 +747,7 @@ def save_atlas(atlas, out_dir, n):
 def get_layouts(**kwargs):
     """Get the image positions in each projection"""
 
-    if kwargs['clusters_provided']:
+    if kwargs["clusters_provided"]:
         umap = get_layout_positions(**kwargs)
     else:
         umap = get_umap_layout(**kwargs)
@@ -708,13 +769,12 @@ def get_layouts(**kwargs):
 
 
 def get_layout_positions(**kwargs):
-    """
-    """
-    metadata = kwargs['metadata']
+    """ """
+    metadata = kwargs["metadata"]
 
     out_path = get_path("layouts", "umap", **kwargs)
 
-    z = [(m['x'], m['y']) for m in metadata]
+    z = [(m["x"], m["y"]) for m in metadata]
 
     return {
         "variants": [
@@ -726,6 +786,7 @@ def get_layout_positions(**kwargs):
             }
         ]
     }
+
 
 def get_umap_layout(**kwargs):
     """Get the x,y positions of images passed through a umap projection"""
@@ -777,7 +838,9 @@ def process_multi_layout_umap(v, **kwargs):
     """Create a multi-layout UMAP projection"""
     print(timestamp(), "Creating multi-umap layout")
     params = []
-    for n_neighbors, min_dist in itertools.product(kwargs["n_neighbors"], kwargs["min_dist"]):
+    for n_neighbors, min_dist in itertools.product(
+        kwargs["n_neighbors"], kwargs["min_dist"]
+    ):
         filename = "umap-n_neighbors_{}-min_dist_{}".format(n_neighbors, min_dist)
         out_path = get_path("layouts", filename, **kwargs)
         params.append(
@@ -813,7 +876,9 @@ def process_multi_layout_umap(v, **kwargs):
             min_dist=[i["min_dist"] for i in uncomputed_params],
         )
         # fit the model on the data
-        z = model.fit([v for _ in params], relations=[relations_dict for _ in params[1:]])
+        z = model.fit(
+            [v for _ in params], relations=[relations_dict for _ in params[1:]]
+        )
         for idx, i in enumerate(params):
             write_layout(i["out_path"], z.embeddings_[idx], **kwargs)
         # save the model
@@ -826,7 +891,9 @@ def process_multi_layout_umap(v, **kwargs):
                 "n_neighbors": i["n_neighbors"],
                 "min_dist": i["min_dist"],
                 "layout": i["out_path"],
-                "jittered": get_pointgrid_layout(i["out_path"], i["filename"], **kwargs),
+                "jittered": get_pointgrid_layout(
+                    i["out_path"], i["filename"], **kwargs
+                ),
             }
         )
     return {
@@ -859,7 +926,9 @@ def load_model(path):
     model.set_params(**params.get("umap_params"))
     for attr, value in params.get("umap_attributes").items():
         model.__setattr__(attr, value)
-    model.__setattr__("embeddings_", List(params.get("umap_attributes").get("embeddings_")))
+    model.__setattr__(
+        "embeddings_", List(params.get("umap_attributes").get("embeddings_"))
+    )
 
 
 def get_umap_model(**kwargs):
@@ -904,7 +973,9 @@ def get_lap_layout(**kwargs):
     # increase cost
     cost = cost * (10000000.0 / cost.max())
     # run the linear assignment
-    min_cost, row_assignments, col_assignments = lap.lapjv(np.copy(cost), extend_cost=True)
+    min_cost, row_assignments, col_assignments = lap.lapjv(
+        np.copy(cost), extend_cost=True
+    )
     # use the assignment vals to determine gridified positions of `arr`
     pos = grid[col_assignments]
     return write_layout(out_path, pos, **kwargs)
@@ -957,14 +1028,19 @@ def get_custom_layout(**kwargs):
             coords.append([x, y])
         else:
             if found_coords:
-                print(timestamp(), "Some images are missing coordinates; skipping custom layout")
+                print(
+                    timestamp(),
+                    "Some images are missing coordinates; skipping custom layout",
+                )
     if not found_coords:
         return
     coords = np.array(coords).astype(np.float)
     coords = (minmax_scale(coords) - 0.5) * 2
     print(timestamp(), "Creating custom layout")
     return {
-        "layout": write_layout(out_path, coords.tolist(), scale=False, round=False, **kwargs),
+        "layout": write_layout(
+            out_path, coords.tolist(), scale=False, round=False, **kwargs
+        ),
     }
 
 
@@ -979,7 +1055,9 @@ def get_date_layout(cols=3, bin_units="years", **kwargs):
     @param int cols: the number of columns to plot for each bar
     @param str bin_units: the temporal units to use when creating bins
     """
-    date_vals = [kwargs["metadata"][i].get("year", False) for i in range(len(kwargs["metadata"]))]
+    date_vals = [
+        kwargs["metadata"][i].get("year", False) for i in range(len(kwargs["metadata"]))
+    ]
     if not kwargs["metadata"] or not any(date_vals):
         return False
     # if the data layouts have been cached, return them
@@ -1019,14 +1097,18 @@ def get_date_layout(cols=3, bin_units="years", **kwargs):
     seconds = np.array([date_to_seconds(dates[d[i][0]]) for i in d_keys])
     d_keys = d_keys[np.argsort(seconds)]
     # determine which images will fill which units of the grid established above
-    coords = np.zeros((len(datestrings), 2))  # 2D array with x, y clip-space coords of each date
+    coords = np.zeros(
+        (len(datestrings), 2)
+    )  # 2D array with x, y clip-space coords of each date
     for jdx, j in enumerate(d_keys):
         for kdx, k in enumerate(d[j]):
             x = jdx * (cols + 1) + (kdx % cols)
             y = kdx // cols
             coords[k] = [grid_x[x], grid_y[y]]
     # find the positions of labels
-    label_positions = np.array([[grid_x[i * (cols + 1)], grid_y[0]] for i in range(len(d))])
+    label_positions = np.array(
+        [[grid_x[i * (cols + 1)], grid_y[0]] for i in range(len(d))]
+    )
     # move the labels down in the y dimension by a grid unit
     dx = grid_x[1] - grid_x[0]  # size of a single cell
     label_positions[:, 1] = label_positions[:, 1] - dx
@@ -1053,7 +1135,9 @@ def datestring_to_date(datestring):
     Given a string representing a date return a datetime object
     """
     try:
-        return parse_date(str(datestring), fuzzy=True, default=datetime.datetime(9999, 1, 1))
+        return parse_date(
+            str(datestring), fuzzy=True, default=datetime.datetime(9999, 1, 1)
+        )
     except Exception as exc:
         print(timestamp(), "Could not parse datestring {}".format(datestring))
         return datestring
@@ -1281,7 +1365,9 @@ def process_geojson(geojson_path):
             for j in i.get("coordinates", []):
                 for k in j:
                     l.append(k)
-    with open(os.path.join("output", "assets", "json", "geographic-features.json"), "w") as out:
+    with open(
+        os.path.join("output", "assets", "json", "geographic-features.json"), "w"
+    ) as out:
         json.dump(l, out)
 
 
@@ -1341,12 +1427,12 @@ def read_json(path, **kwargs):
 
 
 def get_provided_hotspots(**kwargs):
-    
+
     metadata = kwargs["metadata"]
 
     d = defaultdict(lambda: defaultdict(list))
     for idx, m in enumerate(metadata):
-        cluster_id = m['cluster']
+        cluster_id = m["cluster"]
         if cluster_id != -1:
             d[cluster_id]["images"].append(idx)
             d[cluster_id]["img"] = clean_filename(kwargs["image_paths"][idx])
@@ -1363,7 +1449,7 @@ def run_clustering(layouts={}, use_high_dimensional_vectors=True, **kwargs):
         vecs = read_json(layouts["umap"]["variants"][0]["layout"], **kwargs)
     model = get_cluster_model(**kwargs)
     z = model.fit(vecs)
-    
+
     # create a map from cluster label to image indices in cluster
     d = defaultdict(lambda: defaultdict(list))
     for idx, i in enumerate(z.labels_):
@@ -1381,12 +1467,12 @@ def get_hotspots(layouts={}, use_high_dimensional_vectors=True, **kwargs):
         d = get_provided_hotspots(**kwargs)
     else:
         d = run_clustering(layouts, use_high_dimensional_vectors, **kwargs)
-    
+
     # remove massive clusters
     deletable = []
     for i in d:
         # find percent of images in cluster
-        image_percent = len(d[i]["images"]) / kwargs["num_images"] 
+        image_percent = len(d[i]["images"]) / kwargs["num_images"]
         # determine if image or area percent is too large
         if image_percent > 0.5:
             deletable.append(i)
@@ -1399,7 +1485,7 @@ def get_hotspots(layouts={}, use_high_dimensional_vectors=True, **kwargs):
 
     for idx, i in enumerate(clusters):
         i["label"] = "Cluster {}".format(idx + 1)
-    
+
     # slice off the first `max_clusters`
     clusters = clusters[: kwargs["max_clusters"]]
 
@@ -1453,26 +1539,44 @@ def get_heightmap(path, label, **kwargs):
     plt.savefig(out_path, pad_inches=0)
 
 
+def convert_and_write_image(i, out_dir, thumbnail_out_dir, lod_cell_height):
+    """Save an primary image and thumbnail to disk"""
+    filename = clean_filename(i.filename)
+
+    # save resized original for lightbox
+    out_path = os.path.join(out_dir, filename)
+    if not os.path.exists(out_path):
+        resized = i.resize_to_height(600)
+        resized = array_to_img(resized)
+        save_img(out_path, resized)
+
+    # save thumbnail for lod texture
+    out_path = join(thumbnail_out_dir, filename)
+    img = array_to_img(i.resize_to_max(lod_cell_height))
+    save_img(out_path, img)
+
+
 def write_images(**kwargs):
     """Write all originals and thumbs to the output dir"""
-    for i in stream_images(**kwargs):
-        filename = clean_filename(i.filename)
-        # copy original for lightbox
-        out_dir = join(kwargs["out_dir"], "originals")
-        if not exists(out_dir):
-            os.makedirs(out_dir)
-        out_path = join(out_dir, filename)
-        if not os.path.exists(out_path):
-            resized = i.resize_to_height(600)
-            resized = array_to_img(resized)
-            save_img(out_path, resized)
-        # copy thumb for lod texture
-        out_dir = join(kwargs["out_dir"], "thumbs")
-        if not exists(out_dir):
-            os.makedirs(out_dir)
-        out_path = join(out_dir, filename)
-        img = array_to_img(i.resize_to_max(kwargs["lod_cell_height"]))
-        save_img(out_path, img)
+
+    print(timestamp(), "Writing images and thumbnails...")
+
+    out_dir = join(kwargs["out_dir"], "originals")
+    if not exists(out_dir):
+        os.makedirs(out_dir)
+
+    thumbnail_out_dir = join(kwargs["out_dir"], "thumbs")
+    if not exists(thumbnail_out_dir):
+        os.makedirs(thumbnail_out_dir)
+
+    lod_cell_height = kwargs["lod_cell_height"]
+
+    results = parallel.Parallel(n_jobs=-1)(
+        delayed(convert_and_write_image)(
+            img, out_dir, thumbnail_out_dir, lod_cell_height
+        )
+        for img in stream_images(**kwargs)
+    )
 
 
 def get_version():
@@ -1485,12 +1589,12 @@ def load_image(root_path, filename):
 
     try:
         if filename.startswith("http"):
-            img =  pil_image.open(urlopen(filename)).convert("RGB")
+            img = pil_image.open(urlopen(filename)).convert("RGB")
         else:
             image_path = os.path.join(root_path, filename)
             img = pil_image.open(image_path).convert("RGB")
     except Exception as e:
-        print(timestamp(), "Could not load image from path:", image_path)
+        print(timestamp(), "Could not load image from path:", root_path, filename)
         print(e)
         return None
 
@@ -1654,7 +1758,10 @@ def parse():
         help="the n_components argument for UMAP",
     )
     parser.add_argument(
-        "--metric", type=str, default=config["metric"], help="the metric argument for umap"
+        "--metric",
+        type=str,
+        default=config["metric"],
+        help="the metric argument for umap",
     )
     parser.add_argument(
         "--pointgrid_fill",
@@ -1668,9 +1775,14 @@ def parse():
         help="update ./output/assets without reprocessing data",
     )
     parser.add_argument(
-        "--min_size", type=float, default=config["min_size"], help="min size of cropped images"
+        "--min_size",
+        type=float,
+        default=config["min_size"],
+        help="min size of cropped images",
     )
-    parser.add_argument("--gzip", action="store_true", help="save outputs with gzip compression")
+    parser.add_argument(
+        "--gzip", action="store_true", help="save outputs with gzip compression"
+    )
     parser.add_argument(
         "--shuffle",
         action="store_true",
